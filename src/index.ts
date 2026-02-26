@@ -1,9 +1,9 @@
 import { Context, Schema, h } from 'koishi'
 import { } from 'koishi-plugin-gamedig'
-import { } from 'koishi-plugin-canvas'
+import { } from 'koishi-plugin-puppeteer'   // 改为 puppeteer
 
 export const name = 'csss'
-export const inject = ['canvas', 'gamedig', 'database']
+export const inject = ['puppeteer', 'gamedig', 'database']   // 注入 puppeteer
 
 export interface Config {
   timeout: number
@@ -105,8 +105,8 @@ interface CacheEntry {
 
 // 颜色和样式常量
 const COLORS = {
-  background: 'rgba(28,28,31,0.80)',
-  text: 'rgb(113, 113, 122)',
+  background: '#1c1c1fcc',
+  text: '#71717a',
   textLight: '#aaaaaa',
   textLighter: '#dddddd',
   textWhite: '#ffffff',
@@ -126,7 +126,7 @@ const COLORS = {
   divider: '#555555',
   timestamp: '#666666',
   gold: '#FFD700',
-  playerName: 'rgb(252, 248, 222)',
+  playerName: '#fcf8de',
 }
 
 // 工具函数集合
@@ -167,16 +167,15 @@ const utils = {
 
 export function apply(ctx: Context, config: Config) {
   const cache = new Map<string, CacheEntry>()
-
+  
   // 检查所需插件是否可用
   if (!ctx.gamedig) {
     console.error('koishi-plugin-gamedig 未安装或未启用')
     return ctx.logger('cs-server-status').error('需要安装并启用 koishi-plugin-gamedig 插件')
   }
-
-  if (!ctx.canvas) {
-    console.error('koishi-plugin-canvas 未安装或未启用')
-    return ctx.logger('cs-server-status').error('需要安装并启用 koishi-plugin-canvas 插件')
+  if (!ctx.puppeteer) {
+    console.error('koishi-plugin-puppeteer 未安装或未启用')
+    return ctx.logger('cs-server-status').error('需要安装并启用 koishi-plugin-puppeteer 插件')
   }
 
   // 通用查询结果处理函数
@@ -353,398 +352,355 @@ export function apply(ctx: Context, config: Config) {
     return message.trim()
   }
 
-  // 图片生成相关的工具函数
-  const imageUtils = {
-    calculateServerNameFontSize(ctx: any, name: string, maxWidth: number, baseFontSize: number): number {
-      try {
-        if (!ctx || typeof ctx.measureText !== 'function') {
-          console.warn('Canvas context not available, returning default font size')
-          return baseFontSize * 1.5
-        }
+function generateServerHTML(data: { game: string, result: any }, host: string, port: number): string {
+  const { result } = data
+  const playerCount = result.players?.length || 0
+  const botCount = result.bots?.length || 0
+  const maxPlayers = result.maxplayers || 0
+  const cleanName = result.name ? utils.cleanName(result.name) : '未知服务器'
+  const now = new Date().toLocaleString('zh-CN')
 
-        let fontSize = baseFontSize * 1.5
-        while (fontSize > baseFontSize * 0.8) {
-          ctx.font = `bold ${fontSize}px ${config.fontFamily}`
-          const measurement = ctx.measureText(name)
-          if (measurement && measurement.width <= maxWidth) break
-          fontSize -= 1
-        }
-        return fontSize
-      } catch (error) {
-        console.error('Error in calculateServerNameFontSize:', error)
-        return baseFontSize * 1.5
-      }
-    },
+  // 玩家列表 HTML
+  let playersHTML = ''
+  if (playerCount === 0) {
+    playersHTML = `<div class="player-row" style="color: ${COLORS.textLight};">服务器当前无玩家在线</div>`
+  } else {
+    const sortedPlayers = [...result.players].sort((a, b) =>
+      utils.cleanName(a.name).localeCompare(utils.cleanName(b.name))
+    )
+    const displayPlayers = sortedPlayers.slice(0, config.maxPlayers)
 
-    calculatePlayerListParams(playerCount: number) {
-      const shouldEnlarge = playerCount > 0 && playerCount < 10
-      return {
-        shouldEnlarge,
-        fontSizeMultiplier: shouldEnlarge ? 1.2 : 0.9,
-        rowHeight: shouldEnlarge ? 40 : 30,
-        nameMaxLength: shouldEnlarge ? 40 : 30,
-        needTwoColumns: playerCount > 10
-      }
-    },
-
-    drawBackground(ctx: any, width: number, height: number, color: string = COLORS.background) {
-      ctx.fillStyle = color
-      ctx.fillRect(0, 0, width, height)
-    },
-
-    drawTitle(ctx: any, text: string, x: number, y: number, fontSize: number, fontFamily: string, color: string = COLORS.textWhite) {
-      ctx.fillStyle = color
-      ctx.font = `bold ${fontSize}px ${fontFamily}`
-      ctx.textAlign = 'center'
-      ctx.fillText(text, x, y)
-    },
-
-    drawDivider(ctx: any, x1: number, y1: number, x2: number, y2: number, color: string = COLORS.divider, width: number = 2) {
-      ctx.strokeStyle = color
-      ctx.lineWidth = width
-      ctx.beginPath()
-      ctx.moveTo(x1, y1)
-      ctx.lineTo(x2, y2)
-      ctx.stroke()
-    },
-
-    drawText(ctx: any, text: string, x: number, y: number, options: {
-      color?: string
-      fontSize?: number
-      fontFamily?: string
-      align?: 'left' | 'center' | 'right'
-      bold?: boolean
-      italic?: boolean
-    } = {}) {
-      const {
-        color = COLORS.text,
-        fontSize = config.fontSize,
-        fontFamily = config.fontFamily,
-        align = 'left',
-        bold = false,
-        italic = false
-      } = options
-
-      ctx.fillStyle = color
-      ctx.textAlign = align
-      const fontStyle = `${bold ? 'bold' : ''} ${italic ? 'italic' : ''} ${fontSize}px ${fontFamily}`
-      ctx.font = fontStyle.trim() || `${fontSize}px ${fontFamily}`
-      ctx.fillText(text, x, y)
-    },
-
-    drawPlayerList(ctx: any, players: any[], startY: number, width: number, maxHeight: number, params: ReturnType<typeof imageUtils.calculatePlayerListParams>) {
-      let y = startY
-
-      if (players.length === 0) {
-        this.drawText(ctx, '服务器当前无玩家在线', 80, y, { color: COLORS.textLight })
-        return { y: y + 35, displayedCount: 0 }
-      }
-
-      const sortedPlayers = [...players].sort((a, b) => {
-        const nameA = utils.cleanName(a.name).toLowerCase()
-        const nameB = utils.cleanName(b.name).toLowerCase()
-        return nameA.localeCompare(nameB)
-      })
-
-      if (params.needTwoColumns) {
-        const leftColumnX = 80
-        const rightColumnX = width / 2 + 80
-        const playersPerColumn = Math.ceil(players.length / 2)
-        const displayPerColumn = Math.min(playersPerColumn, Math.ceil(config.maxPlayers / 2))
-
-        const leftPlayers = sortedPlayers.slice(0, displayPerColumn)
-        const rightPlayers = sortedPlayers.slice(displayPerColumn, displayPerColumn * 2)
-
-        let currentY = y
-        let displayedCount = 0
-
-        leftPlayers.forEach(player => {
-          const name = utils.truncateText(utils.cleanName(player.name), params.nameMaxLength)
-          this.drawText(ctx, name, leftColumnX, currentY, {
-            fontSize: config.fontSize * params.fontSizeMultiplier,
-            color: COLORS.textLighter
-          })
-          currentY += params.rowHeight
-          displayedCount++
-        })
-
-        currentY = y
-        rightPlayers.forEach(player => {
-          const name = utils.truncateText(utils.cleanName(player.name), params.nameMaxLength)
-          this.drawText(ctx, name, rightColumnX, currentY, {
-            fontSize: config.fontSize * params.fontSizeMultiplier,
-            color: COLORS.textLighter
-          })
-          currentY += params.rowHeight
-          displayedCount++
-        })
-
-        y = Math.max(currentY + 15, y)
-
-        const totalDisplayed = leftPlayers.length + rightPlayers.length
-        if (players.length > totalDisplayed) {
-          this.drawText(ctx, `... 还有 ${players.length - totalDisplayed} 位玩家未显示`, leftColumnX, y, {
-            fontSize: config.fontSize * 0.8,
-            color: COLORS.textLight,
-            italic: true
-          })
-          y += 30
-        }
-
-        return { y, displayedCount }
-      } else {
-        const displayPlayers = sortedPlayers.slice(0, config.maxPlayers)
-
-        displayPlayers.forEach(player => {
-          const name = utils.truncateText(utils.cleanName(player.name), params.nameMaxLength)
-          this.drawText(ctx, name, 80, y, {
-            fontSize: config.fontSize * params.fontSizeMultiplier,
-            color: COLORS.textLighter
-          })
-          y += params.rowHeight
-        })
-
-        return { y, displayedCount: displayPlayers.length }
-      }
-    },
-
-    // 边框绘制函数
-    drawBorder(ctx: any, width: number, height: number) {
-      // 主边框
-      this.drawDivider(ctx, 1, 1, width - 1, 1, COLORS.border, 2)
-      this.drawDivider(ctx, width - 1, 1, width - 1, height - 1, COLORS.border, 2)
-      this.drawDivider(ctx, width - 1, height - 1, 1, height - 1, COLORS.border, 2)
-      this.drawDivider(ctx, 1, height - 1, 1, 1, COLORS.border, 2)
-
-      // 侧边装饰线
-      this.drawDivider(ctx, 5, 0.5 * height - 0.05 * height, 5, height - 0.5 * height + 0.05 * height, COLORS.border, 6)
-      this.drawDivider(ctx, width - 5, 0.5 * height - 0.05 * height, width - 5, height - 0.5 * height + 0.05 * height, COLORS.border, 6)
-
-      // 角标装饰
-      this.drawDivider(ctx, 2, 2, 0.025 * width, 2, COLORS.accent, 3)
-      this.drawDivider(ctx, 2, 2, 2, 0.025 * width, COLORS.accent, 3)
-      this.drawDivider(ctx, width - 2, 2, width - 2, 0.025 * width, COLORS.accent, 3)
-      this.drawDivider(ctx, width - 2, 2, width - 0.025 * width, 2, COLORS.accent, 3)
-      this.drawDivider(ctx, width - 2, height - 2, width - 2, height - 0.025 * width, COLORS.accent, 3)
-      this.drawDivider(ctx, width - 2, height - 2, width - 0.025 * width, height - 2, COLORS.accent, 3)
-      this.drawDivider(ctx, 2, height - 2, 0.025 * width, height - 2, COLORS.accent, 3)
-      this.drawDivider(ctx, 2, height - 2, 2, height - 0.025 * width, COLORS.accent, 3)
-    }
-  }
-
-  function calculateImageHeight(data: { game: string, result: any }): number {
-    const { result } = data
-    const playerCount = result.players?.length || 0
-    const playerParams = imageUtils.calculatePlayerListParams(playerCount)
-
-    let baseHeight = 280
-
-    if (playerCount === 0) {
-      baseHeight += 60
+    const needTwoColumns = playerCount > 10
+    if (needTwoColumns) {
+      const half = Math.ceil(displayPlayers.length / 2)
+      const left = displayPlayers.slice(0, half)
+      const right = displayPlayers.slice(half, half * 2)
+      playersHTML = '<div style="display: flex; gap: 40px;">'
+      playersHTML += '<div>' + left.map(p => 
+        `<div class="player-row">${utils.truncateText(utils.cleanName(p.name), 30)}</div>`
+      ).join('') + '</div>'
+      playersHTML += '<div>' + right.map(p => 
+        `<div class="player-row">${utils.truncateText(utils.cleanName(p.name), 30)}</div>`
+      ).join('') + '</div>'
+      playersHTML += '</div>'
     } else {
-      baseHeight += 90
-
-      if (playerParams.needTwoColumns) {
-        const rows = Math.ceil(Math.min(playerCount, config.maxPlayers) / 2)
-        baseHeight += rows * playerParams.rowHeight
-      } else {
-        const rows = Math.min(playerCount, config.maxPlayers)
-        baseHeight += rows * playerParams.rowHeight
-      }
-
-      if (playerCount > config.maxPlayers) {
-        baseHeight += 40
-      }
+      playersHTML = displayPlayers.map(p => 
+        `<div class="player-row">${utils.truncateText(utils.cleanName(p.name), 40)}</div>`
+      ).join('')
     }
 
-    if (config.showPassword && result.password !== undefined) {
-      baseHeight += 35
+    if (playerCount > config.maxPlayers) {
+      playersHTML += `<div class="player-row" style="color: ${COLORS.textLight}; font-style: italic;">... 还有 ${playerCount - config.maxPlayers} 位玩家未显示</div>`
     }
-
-    if (config.showVAC && result.raw?.secure !== undefined) {
-      baseHeight += 35
-    }
-
-    const height = Math.max(baseHeight, config.imageHeight)
-    return Math.min(height, 2500)
   }
 
-  // 生成单个服务器状态图片
-  async function generateServerImage(data: { game: string, result: any }, host: string, port: number): Promise<Buffer> {
-    const { result } = data
-
-    const width = config.imageWidth
-    const height = calculateImageHeight(data)
-
-    const canvas = await ctx.canvas.createCanvas(width, height)
-    const ctx2d = canvas.getContext('2d')
-
-    imageUtils.drawBackground(ctx2d, width, height)
-
-    const titleY = 80
-    imageUtils.drawTitle(ctx2d, '[服务器状态查询]', width / 2, titleY, config.fontSize * 1.5, config.fontFamily, COLORS.title)
-
-    if (result.name) {
-      const cleanName = utils.cleanName(result.name)
-      const fontSize = imageUtils.calculateServerNameFontSize(ctx2d, cleanName, width - 160, config.fontSize)
-      imageUtils.drawTitle(ctx2d, cleanName, width / 2, titleY + 50, fontSize * 1.8, config.fontFamily, COLORS.highlight)
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: rgba(28,28,31,0.8);
+      font-family: ${config.fontFamily};
+      width: ${config.imageWidth}px;
+      min-height: ${config.imageHeight}px;
+      padding: 40px;
+      color: ${COLORS.text};
+      position: relative;
+      border: 2px solid ${COLORS.border};
     }
-
-    imageUtils.drawDivider(ctx2d, 80, titleY + 80, width - 80, titleY + 80, COLORS.border, 2)
-
-    let y = titleY + 120
-
-    if (result.map) {
-      imageUtils.drawText(ctx2d, `地图: ${result.map}`, 80, y)
+    /* 边框装饰 */
+    .corner {
+      position: absolute;
+      width: 25px;
+      height: 25px;
+      border-color: ${COLORS.accent};
+      border-style: solid;
+      border-width: 0;
     }
-    imageUtils.drawText(ctx2d, `IP: ${host}:${port}`, width - 80, y, { align: 'right' })
+    .corner-tl { top: 2px; left: 2px; border-top-width: 3px; border-left-width: 3px; }
+    .corner-tr { top: 2px; right: 2px; border-top-width: 3px; border-right-width: 3px; }
+    .corner-bl { bottom: 2px; left: 2px; border-bottom-width: 3px; border-left-width: 3px; }
+    .corner-br { bottom: 2px; right: 2px; border-bottom-width: 3px; border-right-width: 3px; }
 
-    y += 40
 
-    const playerCount = result.players?.length || 0
-    const botCount = result.bots?.length || 0
-    const maxPlayers = result.maxplayers || 0
-    const playerText = `人数: ${playerCount}/${maxPlayers}${botCount > 0 ? ` (${botCount} Bot)` : ''}`
-    imageUtils.drawText(ctx2d, playerText, 80, y, { color: utils.getPlayerColor(playerCount) })
-
-    if (result.ping) {
-      imageUtils.drawText(ctx2d, `Ping: ${result.ping}ms`, width - 80, y, {
-        align: 'right',
-        color: utils.getPingColor(result.ping)
-      })
+    .title {
+      text-align: center;
+      font-size: ${config.fontSize * 1.5}px;
+      color: ${COLORS.title};
+      margin-bottom: 20px;
     }
+    .server-name {
+      text-align: center;
+      font-size: ${config.fontSize * 1.8}px;
+      font-weight: bold;
+      color: ${COLORS.highlight};
+      margin: 10px 0 20px;
+      word-break: break-word;
+    }
+    .divider {
+      height: 2px;
+      background: ${COLORS.border};
+      margin: 20px 0;
+    }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      margin: 15px 0;
+      font-size: ${config.fontSize}px;
+    }
+    .player-section {
+      margin-top: 20px;
+    }
+    .player-section-title {
+      font-size: ${config.fontSize}px;
+      font-weight: bold;
+      color: ${COLORS.playerName};
+      margin-bottom: 10px;
+    }
+    .player-row {
+      font-size: ${config.fontSize * 0.9}px;
+      color: ${COLORS.textLighter};
+      line-height: 1.8;
+    }
+    .timestamp {
+      margin-top: 30px;
+      font-size: ${config.fontSize * 0.8}px;
+      color: ${COLORS.timestamp};
+      text-align: left;
+    }
+  </style>
+</head>
+<body>
+  <div class="corner corner-tl"></div>
+  <div class="corner corner-tr"></div>
+  <div class="corner corner-bl"></div>
+  <div class="corner corner-br"></div>
 
-    y += 50
+  <div class="title">[服务器状态查询]</div>
+  <div class="server-name">${cleanName}</div>
+  <div class="divider"></div>
 
-    const playerParams = imageUtils.calculatePlayerListParams(playerCount)
+  <div class="info-row">
+    <span>地图: ${result.map || '未知'}</span>
+    <span>IP: ${host}:${port}</span>
+  </div>
+  <div class="info-row">
+    <span style="color: ${utils.getPlayerColor(playerCount)};">人数: ${playerCount}/${maxPlayers}${botCount ? ` (${botCount} Bot)` : ''}</span>
+    <span style="color: ${utils.getPingColor(result.ping)};">Ping: ${result.ping ? result.ping + 'ms' : '未知'}</span>
+  </div>
 
-    imageUtils.drawText(ctx2d, '在线玩家', 80, y, { color: COLORS.playerName, bold: true, fontSize: config.fontSize })
-    y += 40
+  <div class="player-section">
+    <div class="player-section-title">在线玩家</div>
+    <div class="divider" style="margin: 5px 0 15px;"></div>
+    ${playersHTML}
+  </div>
 
-    imageUtils.drawDivider(ctx2d, 80, y - 15, width - 80, y - 15, COLORS.divider, 1.5)
+  <div class="timestamp">查询时间: ${now}</div>
+</body>
+</html>`
+}
 
-    y += 25
-    const playerListResult = imageUtils.drawPlayerList(ctx2d, result.players || [], y, width, height, playerParams)
-    y = playerListResult.y
+function generateBatchHTML(results: any[], serversToQuery: string[], queryTime: number): string {
+  const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length
+  const failed = results.length - successful
+  const now = new Date().toLocaleString('zh-CN')
 
-    y += 30
+  let serversHTML = ''
+  results.forEach((result, index) => {
+    const server = serversToQuery[index]
+    if (result.status === 'fulfilled' && result.value.success) {
+      const data = result.value.data.result
+      const name = data.name ? utils.cleanName(data.name) : '未知'
+      const playerCount = data.players?.length || 0
+      const maxPlayers = data.maxplayers || 0
+      const map = data.map || ''
+      const ping = data.ping || '?'
+      const pingColor = utils.getPingColor(ping)
+      const playerColor = playerCount > 0 ? COLORS.success : COLORS.error
+      serversHTML += `
+        <div class="server-item">
+          <div class="server-header">
+            <span class="server-index">${index+1}.</span>
+            <span class="server-name">${name}</span>
+            <span class="server-players" style="color: ${playerColor};">${playerCount}/${maxPlayers}</span>
+          </div>
+          <div class="server-details">
+            <span class="server-addr">${server}</span>
+            <span class="server-map">地图: ${map}</span>
+            <span class="server-ping" style="color: ${pingColor};">延迟: ${ping}ms</span>
+          </div>
+        </div>
+      `
+    } else {
+      const errorMsg = result.value?.error || '未知错误'
+      serversHTML += `
+        <div class="server-item error">
+          <div class="server-header">
+            <span class="server-index">${index+1}.</span>
+            <span class="server-name">${server}</span>
+            <span class="server-status">❌ 查询失败</span>
+          </div>
+          <div class="server-details error-msg">${errorMsg}</div>
+        </div>
+      `
+    }
+  })
 
-    const now = new Date()
-    imageUtils.drawText(ctx2d, `查询时间: ${now.toLocaleString('zh-CN')}`, 80, height - 20, {
-      fontSize: config.fontSize * 0.8,
-      color: COLORS.timestamp
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: rgba(28,28,31,0.8);
+      font-family: ${config.fontFamily};
+      width: ${config.imageWidth}px;
+      min-height: ${config.imageHeight}px;
+      padding: 40px;
+      color: ${COLORS.text};
+      position: relative;
+      border: 2px solid ${COLORS.border};
+    }
+    .corner {
+      position: absolute;
+      width: 25px;
+      height: 25px;
+      border-color: ${COLORS.accent};
+      border-style: solid;
+      border-width: 0;
+    }
+    .corner-tl { top: 2px; left: 2px; border-top-width: 3px; border-left-width: 3px; }
+    .corner-tr { top: 2px; right: 2px; border-top-width: 3px; border-right-width: 3px; }
+    .corner-bl { bottom: 2px; left: 2px; border-bottom-width: 3px; border-left-width: 3px; }
+    .corner-br { bottom: 2px; right: 2px; border-bottom-width: 3px; border-right-width: 3px; }
+
+    .title {
+      text-align: center;
+      font-size: ${config.fontSize * 1.8}px;
+      color: ${COLORS.title};
+      margin-bottom: 20px;
+    }
+    .stats {
+      display: flex;
+      justify-content: space-between;
+      font-size: ${config.fontSize}px;
+      margin-bottom: 10px;
+    }
+    .divider {
+      height: 2px;
+      background: ${COLORS.gold};
+      margin: 15px 0 30px;
+    }
+    .server-item {
+      margin-bottom: 30px;
+      border-bottom: 1px solid ${COLORS.divider};
+      padding-bottom: 20px;
+    }
+    .server-item:last-child {
+      border-bottom: none;
+    }
+    .server-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: ${config.fontSize * 1.1}px;
+      font-weight: bold;
+      color: ${COLORS.textWhite};
+      margin-bottom: 8px;
+    }
+    .server-index {
+      color: ${COLORS.accent};
+    }
+    .server-players {
+      margin-left: auto;
+    }
+    .server-details {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+      font-size: ${config.fontSize * 0.9}px;
+      color: ${COLORS.textLight};
+    }
+    .server-details span {
+      white-space: nowrap;
+    }
+    .error .server-name {
+      color: ${COLORS.error};
+    }
+    .error-msg {
+      color: ${COLORS.error};
+      font-size: ${config.fontSize}px;
+    }
+    .timestamp {
+      margin-top: 20px;
+      font-size: ${config.fontSize * 0.8}px;
+      color: ${COLORS.timestamp};
+    }
+  </style>
+</head>
+<body>
+  <!-- 边框装饰 -->
+  <div class="corner corner-tl"></div>
+  <div class="corner corner-tr"></div>
+  <div class="corner corner-bl"></div>
+  <div class="corner corner-br"></div>
+
+  <div class="title">[服务器状态批量查询]</div>
+  <div class="stats">
+    <span>查询时间: ${now}</span>
+    <span>耗时: ${utils.formatTime(queryTime)}  成功: ${successful}/${results.length}</span>
+  </div>
+  <div class="divider"></div>
+
+  ${serversHTML}
+
+  <div class="timestamp">📋 输入 \`cs <服务器地址>\` 查询单个服务器</div>
+</body>
+</html>`
+}
+  
+async function generateServerImage(data: { game: string, result: any }, host: string, port: number): Promise<Buffer> {
+  const html = generateServerHTML(data, host, port)
+  const page = await ctx.puppeteer.page()
+  try {
+    await page.setViewport({
+      width: config.imageWidth,
+      height: config.imageHeight,
+      deviceScaleFactor: 2,
     })
-
-    // 边框
-    imageUtils.drawBorder(ctx2d, width, height)
-
-    return canvas.toBuffer('image/png')
-  }
-
-  // 生成批量查询图片
-  async function generateBatchImage(results: any[], serversToQuery: string[], queryTime: number): Promise<Buffer> {
-    const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length
-    const failed = results.length - successful
-
-    // 计算图片高度
-    const baseHeight = 200
-    const serverHeight = 100
-    const width = config.imageWidth
-    const height = baseHeight + (results.length * serverHeight)
-
-    const canvas = await ctx.canvas.createCanvas(width, height)
-    const ctx2d = canvas.getContext('2d')
-
-    // 背景
-    imageUtils.drawBackground(ctx2d, width, height)
-
-    // 标题
-    imageUtils.drawTitle(ctx2d, '[服务器状态批量查询]', width / 2, 100, config.fontSize * 1.8, config.fontFamily, COLORS.title)
-
-    // 统计信息
-    const now = new Date()
-    imageUtils.drawText(ctx2d, `查询时间: ${now.toLocaleString('zh-CN')}`, 80, 150)
-    imageUtils.drawText(ctx2d, `耗时: ${utils.formatTime(queryTime)}  成功: ${successful}/${results.length}`, width - 80, 150, { align: 'right' })
-
-    // 分隔线
-    imageUtils.drawDivider(ctx2d, 80, 165, width - 80, 165, COLORS.gold, 2)
-
-    let y = 200
-
-    // 每个服务器的信息
-    results.forEach((result, index) => {
-      const server = serversToQuery[index]
-
-      if (result.status === 'fulfilled') {
-        const { success, data, error } = result.value
-
-        if (success && data) {
-          const serverData = data.result
-          const serverName = serverData.name ? utils.cleanName(serverData.name) : '未知'
-          const playerCount = serverData.players?.length || 0
-          const maxPlayers = serverData.maxplayers || 0
-
-          // 服务器序号和名称
-          imageUtils.drawText(ctx2d, `${index + 1}. ${serverName}`, 80, y, {
-            color: COLORS.textWhite,
-            bold: true,
-            fontSize: config.fontSize * 1.1
-          })
-
-          // 服务器地址
-          imageUtils.drawText(ctx2d, server, 80, y + 30, {
-            fontSize: config.fontSize * 0.8,
-            color: COLORS.textLight
-          })
-
-          // 玩家数量
-          const playerText = `${playerCount}/${maxPlayers}`
-          const playerColor = playerCount > 0 ? COLORS.success : COLORS.error
-          imageUtils.drawText(ctx2d, playerText, width - 80, y, {
-            align: 'right',
-            color: playerColor,
-            bold: true
-          })
-
-          // 地图和延迟
-          if (serverData.map) {
-            imageUtils.drawText(ctx2d, `地图: ${serverData.map}`, 80, y + 60, {
-              fontSize: config.fontSize * 0.8,
-              color: COLORS.textLight
-            })
-          }
-
-          if (serverData.ping) {
-            const pingColor = utils.getPingColor(serverData.ping)
-            imageUtils.drawText(ctx2d, `延迟: ${serverData.ping}ms`, width - 80, y + 60, {
-              align: 'right',
-              fontSize: config.fontSize * 0.9,
-              color: pingColor
-            })
-          }
-
-        } else {
-          // 查询失败
-          imageUtils.drawText(ctx2d, `${index + 1}. ${server}`, 80, y, { color: COLORS.textWhite, bold: true })
-          imageUtils.drawText(ctx2d, `❌ 查询失败: ${error}`, 200, y + 35, { color: COLORS.error })
-        }
-      } else {
-        imageUtils.drawText(ctx2d, `${index + 1}. ${server}`, 80, y, { color: COLORS.textWhite, bold: true })
-        imageUtils.drawText(ctx2d, '❌ 查询失败', 200, y + 35, { color: COLORS.error })
-      }
-
-      // 分隔线
-      if (index < results.length - 1) {
-        imageUtils.drawDivider(ctx2d, 80, y + 70, width - 80, y + 70, COLORS.divider, 1)
-      }
-      y += 100
+    await page.setContent(html, { waitUntil: 'networkidle0' })
+    const buffer = await page.screenshot({
+      fullPage: true,
+      type: 'png',
     })
-
-    // 绘制边框
-    imageUtils.drawBorder(ctx2d, width, height)
-
-    return canvas.toBuffer('image/png')
+    return buffer
+  } finally {
+    await page.close().catch(() => {})
   }
+}
+
+async function generateBatchImage(results: any[], serversToQuery: string[], queryTime: number): Promise<Buffer> {
+  const html = generateBatchHTML(results, serversToQuery, queryTime)
+  const page = await ctx.puppeteer.page()
+  try {
+    await page.setViewport({
+      width: config.imageWidth,
+      height: config.imageHeight,
+      deviceScaleFactor: 2,
+    })
+    await page.setContent(html, { waitUntil: 'networkidle0' })
+    const buffer = await page.screenshot({
+      fullPage: true,
+      type: 'png',
+    })
+    return buffer
+  } finally {
+    await page.close().catch(() => {})
+  }
+}
 
   // 主命令 - cs [地址:端口] 查询服务器状态
   ctx.command('cs <address>', '查询服务器状态')
@@ -767,7 +723,6 @@ export function apply(ctx: Context, config: Config) {
         const { host, port } = parseAddress(address)
         const data = await queryServer(host, port)
 
-        // 确定是否生成图片：命令行选项优先 > 配置
         const shouldGenerateImage = options.image || (config.generateImage && !options.text)
 
         if (shouldGenerateImage) {
@@ -776,15 +731,14 @@ export function apply(ctx: Context, config: Config) {
             return h.image(imageBuffer, 'image/png')
           } catch (imageError) {
             console.error('生成图片失败:', imageError)
-            return `生成图片失败: ${imageError.message}`
+            return `生成图片失败: ${imageError.message}，已转为文本输出。\n\n${formatServerInfo(data)}\n\n${formatPlayers(data.result.players || [])}`
           }
         }
 
         let message = formatServerInfo(data)
         message += '\n\n' + formatPlayers(data.result.players || [])
         return message
-
-      } catch (error: any) {
+      } catch (error) {
         let errorMessage = `查询失败: ${error.message}\n\n`
 
         if (error.message.includes('无法加载 gamedig')) {
@@ -811,27 +765,23 @@ export function apply(ctx: Context, config: Config) {
   ctx.command('cs.status', '检查插件状态和配置')
     .action(async () => {
       try {
-        // 检查插件依赖
         const gamedigStatus = ctx.gamedig ? '✅ 可用' : '❌ 不可用'
-        let canvasStatus = '❌ 不可用'
-
-        if (ctx.canvas) {
+        let puppeteerStatus = '❌ 不可用'
+        if (ctx.puppeteer) {
           try {
-            // 测试 canvas 插件
-            const canvas = await ctx.canvas.createCanvas(1, 1)
-            const ctx2d = canvas.getContext('2d')
-            canvasStatus = '✅ 可用'
-          } catch (error) {
-            canvasStatus = `❌ 不可用: ${error.message}`
+            // 简单测试渲染功能
+            await ctx.puppeteer.render('<div>test</div>')
+            puppeteerStatus = '✅ 可用'
+          } catch (e) {
+            puppeteerStatus = `❌ 不可用: ${e.message}`
           }
         }
-
         const cacheSize = cache.size
 
         return `✅ CS服务器查询插件状态\n` +
           `💾 缓存数量: ${cacheSize} 条\n` +
           `🕹️ Gamedig插件: ${gamedigStatus}\n` +
-          `🖼️ Canvas插件: ${canvasStatus}\n` +
+          `🖼️ Puppeteer插件: ${puppeteerStatus}\n` +
           `⚙️ 配置参数:\n` +
           `   超时时间: ${config.timeout}ms\n` +
           `   缓存时间: ${config.cacheTime}ms\n` +
@@ -840,12 +790,14 @@ export function apply(ctx: Context, config: Config) {
           `   显示VAC状态: ${config.showVAC ? '是' : '否'}\n` +
           `   显示密码保护: ${config.showPassword ? '是' : '否'}\n` +
           `   生成图片横幅: ${config.generateImage ? '是' : '否'}\n` +
+          `   图片宽度: ${config.imageWidth}px\n` +
           `   图片最小高度: ${config.imageHeight}px\n` +
-          `   字体大小: ${config.fontSize}px\n\n` +
+          `   字体大小: ${config.fontSize}px\n` +
+          `   字体: ${config.fontFamily}\n\n` +
           `📝 使用: cs [地址:端口]\n` +
           `📝 选项: -i 生成图片, -t 输出文本, -c 清除缓存`
       } catch (error: any) {
-        return `❌ 插件状态异常: ${error.message}\n请确保已安装并启用 koishi-plugin-gamedig 和 koishi-plugin-canvas 插件`
+        return `❌ 插件状态异常: ${error.message}\n请确保已安装并启用 koishi-plugin-gamedig 和 koishi-plugin-puppeteer`
       }
     })
 
@@ -869,7 +821,7 @@ export function apply(ctx: Context, config: Config) {
         `1. 如果不指定端口，默认使用27015\n` +
         `2. 只支持CS服务器查询\n` +
         `3. 查询结果缓存${config.cacheTime}ms，使用 -c 清除缓存\n` +
-        `4. 需要安装 koishi-plugin-gamedig 和 koishi-plugin-canvas 插件`
+        `4. 需要安装 koishi-plugin-gamedig 和 koishi-plugin-puppeteer 插件`
     })
 
   // 批量查询服务器状态
@@ -941,8 +893,6 @@ export function apply(ctx: Context, config: Config) {
 
       try {
         const { results, queryTime } = await queryServers(serversToQuery)
-
-        // 确定是否生成图片：命令行选项优先 > 配置
         const shouldGenerateImage = options.image || (config.generateImage && !options.text)
 
         if (shouldGenerateImage) {
@@ -951,16 +901,14 @@ export function apply(ctx: Context, config: Config) {
             return h.image(imageBuffer, 'image/png')
           } catch (imageError) {
             console.error('生成批量查询图片失败:', imageError)
-            // 生成图片失败时返回文本信息
+            // 失败后继续返回文本
           }
         }
 
         let message = generateTextTable(results, serversToQuery, queryTime, '批量查询结果')
         message += '\n📋 输入 `cs <服务器地址>` 查询单个服务器'
-
         return message
-
-      } catch (error: any) {
+      } catch (error) {
         return `❌ 批量查询失败: ${error.message}`
       }
     })
