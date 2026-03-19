@@ -18,6 +18,7 @@ export interface Config {
   fontSize: number
   fontFamily: string
   serverList: string[]
+  serverAliases: Record<string, string>
   batchTimeout: number
 }
 
@@ -90,6 +91,13 @@ export const Config: Schema<Config> = Schema.object({
       'edgebug.cn:27018',
       'edgebug.cn:27019',
     ]),
+
+  serverAliases: Schema.dict(Schema.string())
+    .description('服务器别名映射（格式: 别名=地址:端口）')
+    .default({
+      '测试': 'edgebug.cn:27015',
+      '混战': 'edgebug.cn:27016',
+    }),
 
   batchTimeout: Schema.number()
     .min(1000)
@@ -206,6 +214,16 @@ export function apply(ctx: Context, config: Config) {
     const queryTime = endTime - startTime
 
     return { results, queryTime, serversToQuery }
+  }
+
+  // 解析地址或别名
+  function resolveAddress(input: string): string {
+    // 检查是否是别名
+    if (config.serverAliases && config.serverAliases[input]) {
+      return config.serverAliases[input]
+    }
+    // 否则直接返回原地址
+    return input
   }
 
   // 通用文本表格生成函数
@@ -709,7 +727,7 @@ async function generateBatchImage(results: any[], serversToQuery: string[], quer
     .option('text', '-t 输出文本信息', { type: Boolean, fallback: false })
     .option('clear', '-c 清除缓存', { type: Boolean, fallback: false })
     .action(async ({ session, options }, address) => {
-      if (!address) return '使用格式: cs [地址:端口]\n示例: cs 127.0.0.1:27015 / cs edgebug.cn'
+      if (!address) return '使用格式: cs [地址:端口] 或 cs [服务器别名]\n示例: cs 127.0.0.1:27015 / cs edgebug.cn / cs 测试'
 
       if (options.clear) {
         const count = cache.size
@@ -718,7 +736,9 @@ async function generateBatchImage(results: any[], serversToQuery: string[], quer
       }
 
       try {
-        const { host, port } = parseAddress(address)
+        const resolvedAddress = resolveAddress(address)
+        const isAlias = resolvedAddress !== address
+        const { host, port } = parseAddress(resolvedAddress)
         const data = await queryServer(host, port)
 
         const shouldGenerateImage = options.image || (config.generateImage && !options.text)
@@ -744,8 +764,8 @@ async function generateBatchImage(results: any[], serversToQuery: string[], quer
           errorMessage += '1. 在插件市场搜索并安装 koishi-plugin-gamedig\n'
           errorMessage += '2. 启用该插件后重启'
         } else if (error.message.includes('无效的地址格式')) {
-          errorMessage += '地址格式应为: 地址:端口\n'
-          errorMessage += '示例: 127.0.0.1:27015 或 edgebug.cn:27015\n'
+          errorMessage += '地址格式应为: 地址:端口 或 服务器别名\n'
+          errorMessage += '示例: 127.0.0.1:27015 或 edgebug.cn:27015 或 测试\n'
           errorMessage += '如果不指定端口，默认使用 27015'
         } else {
           errorMessage += '请检查：\n'
@@ -804,27 +824,31 @@ async function generateBatchImage(results: any[], serversToQuery: string[], quer
     .action(() => {
       return `🔫 CS服务器查询插件帮助\n\n` +
         `📝 基本用法:\n` +
-        `cs [地址:端口]\n` +
-        `示例: cs 127.0.0.1:27015 / cs edgebug.cn\n` +
+        `cs [地址:端口] 或 cs [服务器别名]\n` +
+        `示例: cs 127.0.0.1:27015 / cs edgebug.cn / cs 测试\n` +
         `🔧 选项:\n` +
         `-i 生成图片横幅\n` +
         `-t 输出文本信息\n` +
         `-c 清除缓存\n\n` +
         `🎯 快捷命令:\n` +
-        `csss - 批量查询服务器状态\n\n` +
+        `csss - 批量查询服务器状态\n` +
+        `csss -l 显示配置的服务器列表\n` +
+        `csss -al 显示服务器别名列表\n\n` +
         `📋 其他命令:\n` +
         `cs.status - 检查插件状态和配置\n` +
         `cs.help - 显示此帮助\n\n` +
         `💡 提示:\n` +
         `1. 如果不指定端口，默认使用27015\n` +
         `2. 只支持CS服务器查询\n` +
-        `3. 查询结果缓存${config.cacheTime}ms，使用 -c 清除缓存\n` +
-        `4. 需要安装 koishi-plugin-gamedig 和 koishi-plugin-puppeteer 插件`
+        `3. 可以通过别名快速查询常用服务器\n` +
+        `4. 查询结果缓存${config.cacheTime}ms，使用 -c 清除缓存\n` +
+        `5. 需要安装 koishi-plugin-gamedig 和 koishi-plugin-puppeteer 插件`
     })
 
   // 批量查询服务器状态
   ctx.command('CS服务器批量查询', '批量查询服务器状态')
     .option('list', '-l 显示配置的服务器列表', { type: Boolean, fallback: false })
+    .option('aliases', '-al 显示服务器别名列表', { type: Boolean, fallback: false })
     .option('add', '-a <address> 添加服务器到列表', { type: String })
     .option('remove', '-r <index> 从列表中移除服务器', { type: Number })
     .option('clear', '-c 清空服务器列表', { type: Boolean, fallback: false })
@@ -838,6 +862,18 @@ async function generateBatchImage(results: any[], serversToQuery: string[], quer
           listMessage += `${index + 1}. ${server}\n`
         })
         return listMessage
+      }
+
+      // 显示服务器别名列表
+      if (options.aliases) {
+        if (!config.serverAliases || Object.keys(config.serverAliases).length === 0) {
+          return '📋 当前未配置服务器别名\n请在插件配置中添加别名映射'
+        }
+        let aliasMessage = '📋 服务器别名列表:\n'
+        Object.entries(config.serverAliases).forEach(([alias, address], index) => {
+          aliasMessage += `${index + 1}. ${alias} → ${address}\n`
+        })
+        return aliasMessage
       }
 
       // 添加服务器到列表
@@ -872,7 +908,7 @@ async function generateBatchImage(results: any[], serversToQuery: string[], quer
       // 确定要查询的服务器列表
       let serversToQuery: string[]
       if (addresses.length > 0) {
-        serversToQuery = addresses
+        serversToQuery = addresses.map(addr => resolveAddress(addr))
       } else if (config.serverList.length > 0) {
         serversToQuery = config.serverList
       } else {
