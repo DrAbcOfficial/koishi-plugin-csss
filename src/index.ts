@@ -181,7 +181,7 @@ const utils = {
 
 export function apply(ctx: Context, config: Config) {
   const cache = new Map<string, CacheEntry>()
-  
+
   // 检查所需插件是否可用
   if (!ctx.gamedig) {
     console.error('koishi-plugin-gamedig 未安装或未启用')
@@ -191,6 +191,141 @@ export function apply(ctx: Context, config: Config) {
     console.error('koishi-plugin-puppeteer 未安装或未启用')
     return ctx.logger('cs-server-status').error('需要安装并启用 koishi-plugin-puppeteer 插件')
   }
+
+  // 注册命令后获取命令名称
+  const mainCommand = ctx.command('CS服务器查询 <address>', '查询服务器状态')
+  const statusCommand = ctx.command('CS服务器查询.status', '检查插件状态和配置')
+  const helpCommand = ctx.command('CS服务器查询.help', '查看帮助')
+  const batchCommand = ctx.command('CS服务器批量查询', '批量查询服务器状态')
+
+  const mainCmd = mainCommand.name || 'cs'
+  const statusCmd = statusCommand.name || 'cs.status'
+  const helpCmd = helpCommand.name || 'cs.help'
+  const batchCmd = batchCommand.name || 'csss'
+
+  // 主命令 - cs [地址:端口] 查询服务器状态
+  mainCommand
+    .option('noPlayers', '-n 隐藏玩家列表', { type: Boolean, fallback: false })
+    .option('image', '-i 生成图片横幅', { type: Boolean, fallback: false })
+    .option('text', '-t 输出文本信息', { type: Boolean, fallback: false })
+    .option('clear', '-c 清除缓存', { type: Boolean, fallback: false })
+    .action(async ({ session, options }, address) => {
+      if (!address) return `使用格式: ${mainCmd} [地址:端口] 或 ${mainCmd} [服务器别名]\n示例: ${mainCmd} 127.0.0.1:27015 / ${mainCmd} edgebug.cn / ${mainCmd} 测试`
+
+      if (options.clear) {
+        const count = cache.size
+        cache.clear()
+        return `已清除 ${count} 条缓存记录`
+      }
+
+      try {
+        const resolvedAddress = resolveAddress(address)
+        const { host, port } = parseAddress(resolvedAddress)
+        const data = await queryServer(host, port)
+
+        const shouldGenerateImage = options.image || (config.generateImage && !options.text)
+
+        if (shouldGenerateImage) {
+          try {
+            const imageBuffer = await generateServerImage(data, host, port)
+            return h.image(imageBuffer, 'image/png')
+          } catch (imageError) {
+            console.error('生成图片失败:', imageError)
+            return `生成图片失败: ${imageError.message}，已转为文本输出。\n\n${formatServerInfo(data)}\n\n${formatPlayers(data.result.players || [])}`
+          }
+        }
+
+        let message = formatServerInfo(data)
+        message += '\n\n' + formatPlayers(data.result.players || [])
+        return message
+      } catch (error) {
+        let errorMessage = `查询失败: ${error.message}\n\n`
+
+        if (error.message.includes('无法加载 gamedig')) {
+          errorMessage += '请确保已安装 koishi-plugin-gamedig：\n'
+          errorMessage += '1. 在插件市场搜索并安装 koishi-plugin-gamedig\n'
+          errorMessage += '2. 启用该插件后重启'
+        } else if (error.message.includes('无效的地址格式')) {
+          errorMessage += '地址格式应为: 地址:端口 或 服务器别名\n'
+          errorMessage += '示例: 127.0.0.1:27015 或 edgebug.cn:27015 或 测试\n'
+          errorMessage += '如果不指定端口，默认使用 27015'
+        } else {
+          errorMessage += '请检查：\n'
+          errorMessage += '1. 服务器地址和端口是否正确\n'
+          errorMessage += '2. 服务器是否已开启并允许查询\n'
+          errorMessage += '3. 防火墙是否允许访问\n'
+          errorMessage += '4. 服务器是否为CS服务器'
+        }
+
+        return errorMessage
+      }
+    })
+
+  // 检查插件状态和配置
+  statusCommand
+    .action(async () => {
+      try {
+        const gamedigStatus = ctx.gamedig ? '✅ 可用' : '❌ 不可用'
+        let puppeteerStatus = '❌ 不可用'
+        if (ctx.puppeteer) {
+          try {
+            // 简单测试渲染功能
+            await ctx.puppeteer.render('<div>test</div>')
+            puppeteerStatus = '✅ 可用'
+          } catch (e) {
+            puppeteerStatus = `❌ 不可用: ${e.message}`
+          }
+        }
+        const cacheSize = cache.size
+
+        return `✅ CS服务器查询插件状态\n` +
+          `💾 缓存数量: ${cacheSize} 条\n` +
+          `🕹️ Gamedig插件: ${gamedigStatus}\n` +
+          `🖼️ Puppeteer插件: ${puppeteerStatus}\n` +
+          `⚙️ 配置参数:\n` +
+          `   超时时间: ${config.timeout}ms\n` +
+          `   缓存时间: ${config.cacheTime}ms\n` +
+          `   重试次数: ${config.retryCount}\n` +
+          `   最大显示玩家数: ${config.maxPlayers}\n` +
+          `   显示VAC状态: ${config.showVAC ? '是' : '否'}\n` +
+          `   显示密码保护: ${config.showPassword ? '是' : '否'}\n` +
+          `   生成图片横幅: ${config.generateImage ? '是' : '否'}\n` +
+          `   图片宽度: ${config.imageWidth}px\n` +
+          `   图片最小高度: ${config.imageHeight}px\n` +
+          `   字体大小: ${config.fontSize}px\n` +
+          `   字体: ${config.fontFamily}\n\n` +
+          `📝 使用: ${mainCmd} [地址:端口]\n` +
+          `📝 选项: -i 生成图片, -t 输出文本, -c 清除缓存`
+      } catch (error: any) {
+        return `❌ 插件状态异常: ${error.message}\n请确保已安装并启用 koishi-plugin-gamedig 和 koishi-plugin-puppeteer`
+      }
+    })
+
+  // 帮助命令
+  helpCommand
+    .action(() => {
+      return `🔫 CS服务器查询插件帮助\n\n` +
+        `📝 基本用法:\n` +
+        `${mainCmd} [地址:端口] 或 ${mainCmd} [服务器别名]\n` +
+        `示例: ${mainCmd} 127.0.0.1:27015 / ${mainCmd} edgebug.cn / ${mainCmd} 测试\n` +
+        `🔧 选项:\n` +
+        `-i 生成图片横幅\n` +
+        `-t 输出文本信息\n` +
+        `-c 清除缓存\n\n` +
+        `🎯 快捷命令:\n` +
+        `${batchCmd} - 批量查询服务器状态\n` +
+        `${batchCmd} -l 显示配置的服务器列表\n` +
+        `${batchCmd} -al 显示服务器别名列表\n\n` +
+        `📋 其他命令:\n` +
+        `${statusCmd} - 检查插件状态和配置\n` +
+        `${helpCmd} - 显示此帮助\n\n` +
+        `💡 提示:\n` +
+        `1. 如果不指定端口，默认使用27015\n` +
+        `2. 只支持CS服务器查询\n` +
+        `3. 可以通过别名快速查询常用服务器\n` +
+        `4. 查询结果缓存${config.cacheTime}ms，使用 -c 清除缓存\n` +
+        `5. 需要安装 koishi-plugin-gamedig 和 koishi-plugin-puppeteer 插件`
+    })
 
   // 通用查询结果处理函数
   async function queryServers(serversToQuery: string[]) {
@@ -613,7 +748,7 @@ function generateServerHTML(data: { game: string, result: any }, host: string, p
 </html>`
 }
 
-function generateBatchHTML(results: any[], serversToQuery: string[], queryTime: number): string {
+function generateBatchHTML(results: any[], serversToQuery: string[], queryTime: number, mainCmd: string): string {
   const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length
   const failed = results.length - successful
   const now = new Date().toLocaleString('zh-CN')
@@ -859,7 +994,7 @@ function generateBatchHTML(results: any[], serversToQuery: string[], queryTime: 
 
     ${serversHTML}
 
-    <div class="timestamp">💡 输入 \`cs <服务器地址>\` 查询单个服务器详细信息</div>
+    <div class="timestamp">💡 输入 \`${mainCmd} <服务器地址>\` 查询单个服务器详细信息</div>
   </div>
 </body>
 </html>`
@@ -885,8 +1020,8 @@ async function generateServerImage(data: { game: string, result: any }, host: st
   }
 }
 
-async function generateBatchImage(results: any[], serversToQuery: string[], queryTime: number): Promise<Buffer> {
-  const html = generateBatchHTML(results, serversToQuery, queryTime)
+async function generateBatchImage(results: any[], serversToQuery: string[], queryTime: number, mainCmd: string): Promise<Buffer> {
+  const html = generateBatchHTML(results, serversToQuery, queryTime, mainCmd)
   const page = await ctx.puppeteer.page()
   try {
     await page.setViewport({
@@ -905,133 +1040,8 @@ async function generateBatchImage(results: any[], serversToQuery: string[], quer
   }
 }
 
-  // 主命令 - cs [地址:端口] 查询服务器状态
-  ctx.command('CS服务器查询 <address>', '查询服务器状态')
-    .option('noPlayers', '-n 隐藏玩家列表', { type: Boolean, fallback: false })
-    .option('image', '-i 生成图片横幅', { type: Boolean, fallback: false })
-    .option('text', '-t 输出文本信息', { type: Boolean, fallback: false })
-    .option('clear', '-c 清除缓存', { type: Boolean, fallback: false })
-    .action(async ({ session, options }, address) => {
-      if (!address) return '使用格式: cs [地址:端口] 或 cs [服务器别名]\n示例: cs 127.0.0.1:27015 / cs edgebug.cn / cs 测试'
-
-      if (options.clear) {
-        const count = cache.size
-        cache.clear()
-        return `已清除 ${count} 条缓存记录`
-      }
-
-      try {
-        const resolvedAddress = resolveAddress(address)
-        const isAlias = resolvedAddress !== address
-        const { host, port } = parseAddress(resolvedAddress)
-        const data = await queryServer(host, port)
-
-        const shouldGenerateImage = options.image || (config.generateImage && !options.text)
-
-        if (shouldGenerateImage) {
-          try {
-            const imageBuffer = await generateServerImage(data, host, port)
-            return h.image(imageBuffer, 'image/png')
-          } catch (imageError) {
-            console.error('生成图片失败:', imageError)
-            return `生成图片失败: ${imageError.message}，已转为文本输出。\n\n${formatServerInfo(data)}\n\n${formatPlayers(data.result.players || [])}`
-          }
-        }
-
-        let message = formatServerInfo(data)
-        message += '\n\n' + formatPlayers(data.result.players || [])
-        return message
-      } catch (error) {
-        let errorMessage = `查询失败: ${error.message}\n\n`
-
-        if (error.message.includes('无法加载 gamedig')) {
-          errorMessage += '请确保已安装 koishi-plugin-gamedig：\n'
-          errorMessage += '1. 在插件市场搜索并安装 koishi-plugin-gamedig\n'
-          errorMessage += '2. 启用该插件后重启'
-        } else if (error.message.includes('无效的地址格式')) {
-          errorMessage += '地址格式应为: 地址:端口 或 服务器别名\n'
-          errorMessage += '示例: 127.0.0.1:27015 或 edgebug.cn:27015 或 测试\n'
-          errorMessage += '如果不指定端口，默认使用 27015'
-        } else {
-          errorMessage += '请检查：\n'
-          errorMessage += '1. 服务器地址和端口是否正确\n'
-          errorMessage += '2. 服务器是否已开启并允许查询\n'
-          errorMessage += '3. 防火墙是否允许访问\n'
-          errorMessage += '4. 服务器是否为CS服务器'
-        }
-
-        return errorMessage
-      }
-    })
-
-  // 检查插件状态和配置
-  ctx.command('CS服务器查询.status', '检查插件状态和配置')
-    .action(async () => {
-      try {
-        const gamedigStatus = ctx.gamedig ? '✅ 可用' : '❌ 不可用'
-        let puppeteerStatus = '❌ 不可用'
-        if (ctx.puppeteer) {
-          try {
-            // 简单测试渲染功能
-            await ctx.puppeteer.render('<div>test</div>')
-            puppeteerStatus = '✅ 可用'
-          } catch (e) {
-            puppeteerStatus = `❌ 不可用: ${e.message}`
-          }
-        }
-        const cacheSize = cache.size
-
-        return `✅ CS服务器查询插件状态\n` +
-          `💾 缓存数量: ${cacheSize} 条\n` +
-          `🕹️ Gamedig插件: ${gamedigStatus}\n` +
-          `🖼️ Puppeteer插件: ${puppeteerStatus}\n` +
-          `⚙️ 配置参数:\n` +
-          `   超时时间: ${config.timeout}ms\n` +
-          `   缓存时间: ${config.cacheTime}ms\n` +
-          `   重试次数: ${config.retryCount}\n` +
-          `   最大显示玩家数: ${config.maxPlayers}\n` +
-          `   显示VAC状态: ${config.showVAC ? '是' : '否'}\n` +
-          `   显示密码保护: ${config.showPassword ? '是' : '否'}\n` +
-          `   生成图片横幅: ${config.generateImage ? '是' : '否'}\n` +
-          `   图片宽度: ${config.imageWidth}px\n` +
-          `   图片最小高度: ${config.imageHeight}px\n` +
-          `   字体大小: ${config.fontSize}px\n` +
-          `   字体: ${config.fontFamily}\n\n` +
-          `📝 使用: cs [地址:端口]\n` +
-          `📝 选项: -i 生成图片, -t 输出文本, -c 清除缓存`
-      } catch (error: any) {
-        return `❌ 插件状态异常: ${error.message}\n请确保已安装并启用 koishi-plugin-gamedig 和 koishi-plugin-puppeteer`
-      }
-    })
-
-  // 帮助命令
-  ctx.command('CS服务器查询.help', '查看帮助')
-    .action(() => {
-      return `🔫 CS服务器查询插件帮助\n\n` +
-        `📝 基本用法:\n` +
-        `cs [地址:端口] 或 cs [服务器别名]\n` +
-        `示例: cs 127.0.0.1:27015 / cs edgebug.cn / cs 测试\n` +
-        `🔧 选项:\n` +
-        `-i 生成图片横幅\n` +
-        `-t 输出文本信息\n` +
-        `-c 清除缓存\n\n` +
-        `🎯 快捷命令:\n` +
-        `csss - 批量查询服务器状态\n` +
-        `csss -l 显示配置的服务器列表\n` +
-        `csss -al 显示服务器别名列表\n\n` +
-        `📋 其他命令:\n` +
-        `cs.status - 检查插件状态和配置\n` +
-        `cs.help - 显示此帮助\n\n` +
-        `💡 提示:\n` +
-        `1. 如果不指定端口，默认使用27015\n` +
-        `2. 只支持CS服务器查询\n` +
-        `3. 可以通过别名快速查询常用服务器\n` +
-        `4. 查询结果缓存${config.cacheTime}ms，使用 -c 清除缓存\n` +
-        `5. 需要安装 koishi-plugin-gamedig 和 koishi-plugin-puppeteer 插件`
-    })
-
   // 批量查询服务器状态
-  ctx.command('CS服务器批量查询', '批量查询服务器状态')
+  batchCommand
     .option('list', '-l 显示配置的服务器列表', { type: Boolean, fallback: false })
     .option('aliases', '-al 显示服务器别名列表', { type: Boolean, fallback: false })
     .option('add', '-a <address> 添加服务器到列表', { type: String })
@@ -1097,7 +1107,7 @@ async function generateBatchImage(results: any[], serversToQuery: string[], quer
       } else if (config.serverList.length > 0) {
         serversToQuery = config.serverList
       } else {
-        return '❌ 没有可查询的服务器\n请使用: csss -a <地址:端口> 添加服务器\n或使用: csss <地址1> <地址2> ... 临时查询'
+        return `❌ 没有可查询的服务器\n请使用: ${batchCmd} -a <地址:端口> 添加服务器\n或使用: ${batchCmd} <地址1> <地址2> ... 临时查询`
       }
 
       // 限制最大查询数量
@@ -1113,7 +1123,7 @@ async function generateBatchImage(results: any[], serversToQuery: string[], quer
 
         if (shouldGenerateImage) {
           try {
-            const imageBuffer = await generateBatchImage(results, serversToQuery, queryTime)
+            const imageBuffer = await generateBatchImage(results, serversToQuery, queryTime, mainCmd)
             return h.image(imageBuffer, 'image/png')
           } catch (imageError) {
             console.error('生成批量查询图片失败:', imageError)
@@ -1122,7 +1132,7 @@ async function generateBatchImage(results: any[], serversToQuery: string[], quer
         }
 
         let message = generateTextTable(results, serversToQuery, queryTime, '批量查询结果')
-        message += '\n📋 输入 `cs <服务器地址>` 查询单个服务器'
+        message += `\n📋 输入 \`${mainCmd} <服务器地址>\` 查询单个服务器`
         return message
       } catch (error) {
         return `❌ 批量查询失败: ${error.message}`
