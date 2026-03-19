@@ -1,7 +1,7 @@
 {
   "name": "@drabc/koishi-plugin-csss",
   "description": "Check the status of the CS server",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
