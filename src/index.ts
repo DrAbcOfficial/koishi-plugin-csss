@@ -703,9 +703,7 @@ async function generateBatchImage(results: any[], serversToQuery: string[], quer
 }
 
   // 主命令 - cs [地址:端口] 查询服务器状态
-  ctx.command('cs <address>', '查询服务器状态')
-    .alias('查询')
-    .alias('server')
+  ctx.command('CS服务器查询 <address>', '查询服务器状态')
     .option('noPlayers', '-n 隐藏玩家列表', { type: Boolean, fallback: false })
     .option('image', '-i 生成图片横幅', { type: Boolean, fallback: false })
     .option('text', '-t 输出文本信息', { type: Boolean, fallback: false })
@@ -762,7 +760,7 @@ async function generateBatchImage(results: any[], serversToQuery: string[], quer
     })
 
   // 检查插件状态和配置
-  ctx.command('cs.status', '检查插件状态和配置')
+  ctx.command('CS服务器查询.status', '检查插件状态和配置')
     .action(async () => {
       try {
         const gamedigStatus = ctx.gamedig ? '✅ 可用' : '❌ 不可用'
@@ -802,7 +800,7 @@ async function generateBatchImage(results: any[], serversToQuery: string[], quer
     })
 
   // 帮助命令
-  ctx.command('cs.help', '查看帮助')
+  ctx.command('CS服务器查询.help', '查看帮助')
     .action(() => {
       return `🔫 CS服务器查询插件帮助\n\n` +
         `📝 基本用法:\n` +
@@ -825,10 +823,7 @@ async function generateBatchImage(results: any[], serversToQuery: string[], quer
     })
 
   // 批量查询服务器状态
-  ctx.command('csss', '批量查询服务器状态')
-    .alias('batch')
-    .alias('multi')
-    .alias('批量查询')
+  ctx.command('CS服务器批量查询', '批量查询服务器状态')
     .option('list', '-l 显示配置的服务器列表', { type: Boolean, fallback: false })
     .option('add', '-a <address> 添加服务器到列表', { type: String })
     .option('remove', '-r <index> 从列表中移除服务器', { type: Number })
