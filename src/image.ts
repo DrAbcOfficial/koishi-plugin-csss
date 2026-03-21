@@ -243,6 +243,15 @@ export function generateBatchHTML(results: any[], serversToQuery: string[], quer
   const failed = results.length - successful
   const now = new Date().toLocaleString('zh-CN')
 
+  function findAlias(serverAddress: string): string | null {
+    if (!config.serverAliases) return null
+    const address = serverAddress.includes(':') ? serverAddress : `${serverAddress}:27015`
+    for (const [alias, addr] of Object.entries(config.serverAliases)) {
+      if (addr === address) return alias
+    }
+    return null
+  }
+
   let serversHTML = ''
   results.forEach((result, index) => {
     const server = serversToQuery[index]
@@ -255,11 +264,15 @@ export function generateBatchHTML(results: any[], serversToQuery: string[], quer
       const ping = data.ping || '?'
       const pingColor = utils.getPingColor(ping)
       const playerColor = playerCount > 0 ? COLORS.success : COLORS.error
+      const alias = findAlias(server)
+
+      const aliasBadge = alias ? `<span class="alias-badge">${alias}</span>` : ''
+
       serversHTML += `
         <div class="server-item">
           <div class="server-header">
             <span class="server-index">${index+1}.</span>
-            <span class="server-name">${name}</span>
+            <span class="server-name">${name}${aliasBadge}</span>
             <span class="server-players" style="color: ${playerColor};">${playerCount}/${maxPlayers}</span>
           </div>
           <div class="server-details">
@@ -419,6 +432,17 @@ export function generateBatchHTML(results: any[], serversToQuery: string[], quer
       border-radius: 20px;
       font-size: ${config.fontSize * 0.9}px;
       font-weight: 600;
+    }
+
+    .alias-badge {
+      background: ${COLORS.warningLight};
+      color: ${COLORS.warning};
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: ${config.fontSize * 0.9}px;
+      font-weight: 600;
+      margin-left: 8px;
+      white-space: nowrap;
     }
 
     .server-details {
